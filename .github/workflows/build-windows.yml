@@ -1,10 +1,19 @@
 # Builds the Windows installer on GitHub's own Windows machines, so you don't need a Windows PC.
-# Run it from the Actions tab (Run workflow), then download "MeetingAgent-Windows" from the finished run.
+#
+# Two ways to use it:
+#   1. Push a tag that starts with "windows-v" (for example windows-v0.1.0). GitHub builds the installer and
+#      publishes it on the Releases page, ready to download.
+#   2. Open the Actions tab, choose "Build Windows installer", then "Run workflow". Download
+#      "MeetingAgent-Windows" from the finished run.
 name: Build Windows installer
 on:
   workflow_dispatch:
   push:
     tags: ['windows-v*']
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -21,3 +30,14 @@ jobs:
         with:
           name: MeetingAgent-Windows
           path: dist-installer/*.exe
+      - name: Publish to Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $exe = Get-ChildItem dist-installer -Filter *.exe | Select-Object -First 1
+          gh release create "${{ github.ref_name }}" $exe.FullName `
+            --title "Meeting Agent for Windows ${{ github.ref_name }}" `
+            --notes "First version of Meeting Agent for Windows (64-bit, Windows 10 and 11). Download the .exe below and run it. Windows may show 'Windows protected your PC' because the app is not code-signed: click More info, then Run anyway. This version has not been tested on a real Windows PC yet, so please report anything that breaks at https://github.com/amithkshinde/meeting-agent-windows/issues" `
+            --prerelease

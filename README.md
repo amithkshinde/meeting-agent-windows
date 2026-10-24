@@ -44,7 +44,9 @@ Looking for the Mac version? See **[meeting-agent-mac](https://github.com/amithk
 
 ## Install and run
 
-You need a Windows 10 or 11 PC. There are two ways to get the app.
+You need a Windows 10 or 11 PC. The easiest way is to download the installer from the
+[Releases page](https://github.com/amithkshinde/meeting-agent-windows/releases) (once a release is published).
+There are two other ways to get the app.
 
 ### Option A: run it from source (works today)
 
@@ -57,10 +59,10 @@ You need a Windows 10 or 11 PC. There are two ways to get the app.
 
 - **On a Windows PC:** double-click **Build Windows Installer.bat**. The installer appears in the `dist-installer`
   folder as `MeetingAgent-Setup-<version>-x64.exe`. Send that one file to anyone.
-- **Without a Windows PC:** let GitHub build it for you.
-  1. Open the **Actions** tab of this repository.
-  2. Choose **Build Windows installer**, then **Run workflow**.
-  3. When the run finishes, download **MeetingAgent-Windows** from the bottom of the run page. It contains the `.exe`.
+- **Without a Windows PC:** let GitHub build it for you. Push a tag that starts with `windows-v` (for example
+  `windows-v0.1.0`) and GitHub builds the installer on its own Windows machines, then publishes the `.exe` on the
+  **Releases** page. You can also open the **Actions** tab, choose **Build Windows installer**, click
+  **Run workflow**, and download **MeetingAgent-Windows** from the finished run.
 
 ### The "Windows protected your PC" warning
 
