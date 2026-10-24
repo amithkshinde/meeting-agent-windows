@@ -1,0 +1,23 @@
+# Builds the Windows installer on GitHub's own Windows machines, so you don't need a Windows PC.
+# Run it from the Actions tab (Run workflow), then download "MeetingAgent-Windows" from the finished run.
+name: Build Windows installer
+on:
+  workflow_dispatch:
+  push:
+    tags: ['windows-v*']
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MeetingAgent-Windows
+          path: dist-installer/*.exe

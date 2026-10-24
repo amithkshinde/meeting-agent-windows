@@ -1,0 +1,30 @@
+{
+  "name": "meeting-agent-windows",
+  "version": "0.1.0",
+  "description": "Meeting Agent for Windows: detects calls, records screen and audio, transcribes, summarises and tracks promises.",
+  "author": "Amith K Shinde",
+  "license": "MIT",
+  "main": "dist/app/main/main.js",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.renderer.json && node scripts/copy-assets.mjs",
+    "start": "npm run build && electron .",
+    "test": "npm run build && node --test \"dist/app/tests/*.test.js\"",
+    "dist": "npm run build && electron-builder --win --x64",
+    "dist:arm": "npm run build && electron-builder --win --arm64"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0"
+  },
+  "meetingAgent": {
+    "repo": "amithkshinde/meeting-agent-windows",
+    "feedbackEmail": "",
+    "feedbackEndpoint": ""
+  }
+}

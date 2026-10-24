@@ -1,0 +1,22 @@
+appId: com.amithkshinde.meetingagent
+productName: Meeting Agent
+copyright: Copyright (c) 2026 Amith K Shinde
+directories:
+  output: dist-installer
+files:
+  - dist/**/*
+  - package.json
+  - build/icon.png
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+  artifactName: MeetingAgent-Setup-${version}-${arch}.${ext}
+nsis:
+  oneClick: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+  shortcutName: Meeting Agent
+asarUnpack:
+  - node_modules/ffmpeg-static/**
