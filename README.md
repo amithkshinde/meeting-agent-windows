@@ -59,10 +59,11 @@ There are two other ways to get the app.
 
 - **On a Windows PC:** double-click **Build Windows Installer.bat**. The installer appears in the `dist-installer`
   folder as `MeetingAgent-Setup-<version>-x64.exe`. Send that one file to anyone.
-- **Without a Windows PC:** let GitHub build it for you. Push a tag that starts with `windows-v` (for example
-  `windows-v0.1.0`) and GitHub builds the installer on its own Windows machines, then publishes the `.exe` on the
-  **Releases** page. You can also open the **Actions** tab, choose **Build Windows installer**, click
-  **Run workflow**, and download **MeetingAgent-Windows** from the finished run.
+- **Without a Windows PC:** let GitHub build it for you.
+  1. Open the **Actions** tab of this repository.
+  2. Choose **Build Windows installer**, then click **Run workflow**.
+  3. After about ten minutes the `.exe` appears on the **Releases** page, ready to download.
+  (Pushing a tag that starts with `windows-v` does the same thing.)
 
 ### The "Windows protected your PC" warning
 

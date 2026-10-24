@@ -1,10 +1,9 @@
 # Builds the Windows installer on GitHub's own Windows machines, so you don't need a Windows PC.
 #
 # Two ways to use it:
-#   1. Push a tag that starts with "windows-v" (for example windows-v0.1.0). GitHub builds the installer and
-#      publishes it on the Releases page, ready to download.
-#   2. Open the Actions tab, choose "Build Windows installer", then "Run workflow". Download
-#      "MeetingAgent-Windows" from the finished run.
+#   1. Open the Actions tab, choose "Build Windows installer", then "Run workflow". GitHub builds the installer
+#      and publishes it on the Releases page (tag windows-v<version>, taken from package.json).
+#   2. Or push a tag that starts with "windows-v". The same thing happens.
 name: Build Windows installer
 on:
   workflow_dispatch:
@@ -31,13 +30,17 @@ jobs:
           name: MeetingAgent-Windows
           path: dist-installer/*.exe
       - name: Publish to Releases
-        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "windows-v$version"
           $exe = Get-ChildItem dist-installer -Filter *.exe | Select-Object -First 1
-          gh release create "${{ github.ref_name }}" $exe.FullName `
-            --title "Meeting Agent for Windows ${{ github.ref_name }}" `
-            --notes "First version of Meeting Agent for Windows (64-bit, Windows 10 and 11). Download the .exe below and run it. Windows may show 'Windows protected your PC' because the app is not code-signed: click More info, then Run anyway. This version has not been tested on a real Windows PC yet, so please report anything that breaks at https://github.com/amithkshinde/meeting-agent-windows/issues" `
-            --prerelease
+          $notes = "Meeting Agent for Windows $version (64-bit, Windows 10 and 11). Download the .exe below and run it. Windows may show 'Windows protected your PC' because the app is not code-signed: click More info, then Run anyway. This version has not been tested on a real Windows PC yet, so please report anything that breaks at https://github.com/amithkshinde/meeting-agent-windows/issues"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $exe.FullName --clobber
+          } else {
+            gh release create $tag $exe.FullName --target "${{ github.sha }}" --title "Meeting Agent for Windows $version" --notes $notes --prerelease
+          }
