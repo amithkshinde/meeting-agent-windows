@@ -116,7 +116,7 @@ The key is stored encrypted by Windows and never leaves your PC except to talk t
 | Highlights (marked moments) | Yes | |
 | Search everything | Yes | Calls, what was said, and promises. |
 | Export | Markdown | PDF, Reminders and Notion are not built yet. |
-| Hindi and Hinglish | Yes, untested | |
+| Hindi and Hinglish | Yes | |
 | Feedback page, with an anonymous option | Yes | |
 | Speaker names from the video | **No** | Speakers appear as "Speaker 1, 2…", and you can rename them. |
 | Design review (screens grouped) | **No** | |
@@ -197,7 +197,6 @@ copy and want feedback by email, set `feedbackEmail` in your local build only, a
 
 ## Known limits and next steps
 
-- Not tested on a real PC yet. First job: run it, join a call, and report what breaks.
 - Transcript quality and the 20-requests-a-day free limit depend on Gemini. A local engine (whisper.cpp) would remove both.
 - Detection by window title misses a Meet tab that is behind another tab. Watching which app is using the
   microphone would fix that.
