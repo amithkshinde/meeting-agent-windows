@@ -169,6 +169,12 @@ function render(): void {
   if (keep) (document.getElementById(keep) as HTMLInputElement | null)?.focus();
   const video = document.getElementById('vid') as HTMLVideoElement | null;
   if (video) {
+    video.addEventListener('error', () => {
+      const note = document.createElement('div');
+      note.className = 'card muted';
+      note.textContent = 'This video could not be played. The transcript and summary still work.';
+      video.replaceWith(note);
+    }, { once: true });
     const follow = () => {
       const lines = Array.from(document.querySelectorAll<HTMLElement>('#tx .tline'));
       let now: HTMLElement | null = null;
@@ -197,7 +203,13 @@ async function load(): Promise<void> {
 }
 
 async function openCall(id: string, seek: number | null = null): Promise<void> {
-  detail = await invoke('call:get', id);
+  try {
+    detail = await invoke('call:get', id);
+  } catch {
+    flash = 'This call could not be opened. Its files may be missing or damaged.';
+    render();
+    return;
+  }
   view = 'call';
   tab = seek !== null ? 'transcript' : tab;
   pendingSeek = seek;
