@@ -34,6 +34,8 @@ export interface Settings {
   language: 'auto' | 'en' | 'hi' | 'hinglish';
   script: 'roman' | 'devanagari';
   watchCalls: boolean;
+  liveCaptions: boolean;
+  copilot: boolean;
   hasKey: boolean;
   keyKind: 'none' | 'gemini' | 'claude';
 }

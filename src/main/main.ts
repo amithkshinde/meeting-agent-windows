@@ -6,9 +6,12 @@ import { CallDebouncer, matchCall } from '../shared/detect';
 import { DetectedCall, Settings } from '../shared/types';
 import { rename } from '../shared/transcript';
 import { search } from '../shared/search';
-import { markdown, fileName } from './exporter';
+import { markdown, html, fileName } from './exporter';
 import * as feedback from './feedbackService';
 import { processCall } from './pipeline';
+import * as live from './live';
+import { CHAT_SYSTEM, chatContext, chatPrompt } from '../shared/live';
+import { AIError, complete } from './ai';
 import { clearKey, keyKind, loadKey, saveKey } from './secrets';
 import * as store from './store';
 import { listWindows } from './windows';
@@ -38,7 +41,7 @@ app.on('second-instance', () => openLibrary());
 function createPanel(): void {
   const { workArea } = screen.getPrimaryDisplay();
   panel = new BrowserWindow({
-    width: 340, height: 120, x: workArea.x + workArea.width - 360, y: workArea.y + workArea.height - 140,
+    width: 392, height: 120, x: workArea.x + workArea.width - 412, y: workArea.y + workArea.height - 140,
     frame: false, alwaysOnTop: true, resizable: false, skipTaskbar: true, show: false, title: 'Meeting Agent',
     backgroundColor: '#12131a',
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false }
@@ -166,6 +169,7 @@ function settingsView(): Settings {
 function setupIpc(): void {
   handle('rec:start', (appName: string, title: string) => {
     const call = store.newCall(appName, title);
+    live.reset();
     const dir = store.folder(call.id);
     recording = {
       id: call.id,
@@ -215,8 +219,10 @@ function setupIpc(): void {
     if (!panel) return;
     const { workArea } = screen.getPrimaryDisplay();
     const [width] = panel.getSize();
-    panel.setBounds({ x: workArea.x + workArea.width - width - 20, y: workArea.y + workArea.height - height - 20, width, height });
+    const h = Math.min(Math.max(height, 90), workArea.height - 40);
+    panel.setBounds({ x: workArea.x + workArea.width - width - 20, y: workArea.y + workArea.height - h - 20, width, height: h });
   });
+  handle('panel:hide', () => panel?.hide());
   handle('app:open-library', (view?: string) => openLibrary(view));
 
   handle('calls:list', () => store.listCalls());
@@ -280,6 +286,40 @@ function setupIpc(): void {
     const calls = store.listCalls();
     const transcripts = new Map(calls.map((c) => [c.id, store.readTranscript(c.id)] as const));
     return search(query, calls, transcripts);
+  });
+
+  handle('live:chunk', (data: ArrayBuffer, offsetSec: number) => live.chunk(data, offsetSec, (channel, ...args) => panel?.webContents.send(channel, ...args)));
+
+  handle('chat:ask', async (question: string, project: string) => {
+    const key = loadKey();
+    if (!key) return { ok: false, text: 'Add an AI key in Settings and I can answer from your calls.' };
+    const q = String(question ?? '').trim();
+    if (!q) return { ok: false, text: '' };
+    const calls = store.listCalls().filter((c) => c.status === 'done');
+    const transcripts = new Map(calls.map((c) => [c.id, store.readTranscript(c.id)] as const));
+    // During a call, what has just been said live counts too.
+    const liveText = recording ? live.current().slice(-30).map((l) => `${l.speaker}: ${l.text}`).join('\n') : '';
+    const context = chatContext(q, calls, transcripts, project || '') + (liveText ? `\n\nThe call happening right now (latest lines):\n${liveText}` : '');
+    try {
+      return { ok: true, text: await complete(key, CHAT_SYSTEM, chatPrompt(q, context), false, 1500) };
+    } catch (error) {
+      return { ok: false, text: error instanceof AIError ? error.message : 'I could not reach the AI service. Try again in a moment.' };
+    }
+  });
+
+  handle('export:pdf', async (id: string) => {
+    const call = store.readCall(id);
+    if (!call) return false;
+    const result = await dialog.showSaveDialog(library ?? undefined!, { defaultPath: fileName(call, 'pdf'), filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+    if (result.canceled || !result.filePath) return false;
+    const page = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+    try {
+      await page.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html(call, store.readTranscript(id))));
+      fs.writeFileSync(result.filePath, await page.webContents.printToPDF({ pageSize: 'A4', printBackground: true }));
+      return true;
+    } finally {
+      page.destroy();
+    }
   });
 
   handle('settings:get', () => settingsView());

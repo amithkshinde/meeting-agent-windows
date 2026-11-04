@@ -110,18 +110,18 @@ The key is stored encrypted by Windows and never leaves your PC except to talk t
 | Notices Google Meet, Zoom and Teams calls | Yes | Reads window titles. Meet only counts while its tab is in front. Teams is best effort. |
 | Floating window, tray icon, hotkeys | Yes | |
 | Records screen, the other people, and your mic | Yes | 10 frames a second, up to 1080p, as three files per call. |
-| Transcript | After the call | Not live yet. About a minute for a 30-minute call. |
+| Transcript | After the call, and live | Live captions are optional (Settings, or the switch in the floating window). They need a Gemini key and use about 1.5 AI requests a minute. |
 | Summary, decisions, promises | Yes | Same idea as the Mac app. |
 | Click a transcript line to jump the video | Yes | The video is repaired after recording so jumping works. |
 | Highlights (marked moments) | Yes | |
 | Search everything | Yes | Calls, what was said, and promises. |
-| Export | Markdown | PDF, Reminders and Notion are not built yet. |
+| Export | Markdown and PDF | Reminders and Notion are not built yet. |
 | Hindi and Hinglish | Yes | |
 | Feedback page, with an anonymous option | Yes | |
 | Speaker names from the video | **No** | Speakers appear as "Speaker 1, 2…", and you can rename them. |
 | Design review (screens grouped) | **No** | |
-| Live suggestions during the call | **No** | |
-| Per-project memory and chat over everything | **No** | Calls can be tagged with a project. |
+| Live suggestions during the call | Yes | Suggested replies, a recap of the last few points, and flags, drawn from your earlier calls. Needs live captions. |
+| Projects, and chat over everything | Yes | Projects page, an Ask page, and an Ask tab in the floating window. |
 
 ---
 
@@ -200,7 +200,8 @@ copy and want feedback by email, set `feedbackEmail` in your local build only, a
 - Transcript quality and the 20-requests-a-day free limit depend on Gemini. A local engine (whisper.cpp) would remove both.
 - Detection by window title misses a Meet tab that is behind another tab. Watching which app is using the
   microphone would fix that.
-- Next ports from the Mac app: live captions, speaker names from video, design review, PDF export, Reminders and Notion.
+- Live captions use short pieces of the other people's sound, so they lag by up to about 40 seconds and only cover the other side of the call. Your own voice is added to the full transcript after the call.
+- Next ports from the Mac app: speaker names from video, design review, Reminders and Notion.
 
 ---
 

@@ -5,7 +5,8 @@ interface TLine { id: number; time: number | null; speaker: string; text: string
 interface Mark { t: number; note: string }
 interface Detail { call: Call; transcript: TLine[]; bookmarks: Mark[]; videoUrl: string | null }
 interface Hit { kind: string; callId: string; title: string; detail: string; seek?: number }
-interface Settings { userName: string; language: string; script: string; watchCalls: boolean; hasKey: boolean; keyKind: string }
+interface Settings { userName: string; language: string; script: string; watchCalls: boolean; liveCaptions: boolean; copilot: boolean; hasKey: boolean; keyKind: string }
+interface Answer { q: string; a: string; ok: boolean; pending?: boolean }
 interface FbEntry { id: string; date: string; kind: string; message: string; sentVia: string | null }
 
 const KINDS: [string, string][] = [['idea', '💡 Idea'], ['bug', '🐞 Something broke'], ['praise', '❤️ What I liked'], ['question', '❓ Question']];
@@ -30,6 +31,10 @@ let fbEntries: FbEntry[] = [];
 let fbCaps = { email: false, endpoint: false };
 const fb = { kind: 'idea', rating: 0, message: '', anonymous: false, name: '', email: '', includeDetails: true, includeLog: false, status: '', ok: true };
 let searchTimer: number | undefined;
+let project = '';
+let askLog: Answer[] = [];
+let askDraft = '';
+let askScope = '';
 
 const root = document.getElementById('root') as HTMLElement;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
@@ -55,15 +60,28 @@ const openMine = () => calls.flatMap((c) => c.promises).filter((p) => p.mine && 
 
 // MARK: views
 
+const svg = (d: string) => `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const IC = {
+  search: svg('<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/>'),
+  home: svg('<path d="M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4v-5h-6v5H5a1 1 0 0 1-1-1z"/>'),
+  projects: svg('<path d="M3.5 7.5a1.5 1.5 0 0 1 1.5-1.5h4l2 2.2h8a1.5 1.5 0 0 1 1.5 1.5V17a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 17z"/>'),
+  ask: svg('<path d="M20 12a8 8 0 0 1-11.7 7L4 20l1.1-4A8 8 0 1 1 20 12z"/><path d="M9.5 10h5M9.5 13.5h3"/>'),
+  promises: svg('<circle cx="12" cy="12" r="8.5"/><path d="m8.5 12.2 2.4 2.4 4.6-5"/>'),
+  feedback: svg('<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H10l-4 3.5V16h-.5A1.5 1.5 0 0 1 4 14.5z"/>'),
+  settings: svg('<circle cx="12" cy="12" r="3"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6"/>')
+};
+
 function sidebar(): string {
-  const nav = (id: string, label: string, extra = '') => `<button class="nav ${view === id ? 'active' : ''}" data-a="go" data-id="${id}"><span>${label}</span>${extra}</button>`;
+  const nav = (id: string, icon: string, label: string, extra = '') => `<button class="nav ${view === id || (id === 'projects' && view === 'project') ? 'active' : ''}" data-a="go" data-id="${id}"><span class="nl">${icon}${label}</span>${extra}</button>`;
   return `<aside class="side"><div class="logo"><i></i>Meeting Agent</div>
-    ${nav('search', '🔍 Search <span class="muted small">Ctrl+K</span>')}
-    ${nav('home', '🏠 Home')}
-    ${nav('promises', '✅ Promises', openMine() ? `<span class="badge">${openMine()}</span>` : '')}
+    ${nav('search', IC.search, 'Search', '<span class="muted small">Ctrl+K</span>')}
+    ${nav('home', IC.home, 'Home')}
+    ${nav('projects', IC.projects, 'Projects')}
+    ${nav('ask', IC.ask, 'Ask')}
+    ${nav('promises', IC.promises, 'Promises', openMine() ? `<span class="badge">${openMine()}</span>` : '')}
     <div class="grow"></div>
-    ${nav('feedback', '💬 Feedback')}
-    ${nav('settings', '⚙️ Settings')}</aside>`;
+    ${nav('feedback', IC.feedback, 'Feedback')}
+    ${nav('settings', IC.settings, 'Settings')}</aside>`;
 }
 
 function homeView(): string {
@@ -71,12 +89,22 @@ function homeView(): string {
   const hello = `${hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'}${settings?.userName ? ', ' + esc(settings.userName) : ''}`;
   let html = `<h1>${hello}</h1><p class="muted">${calls.length ? `${calls.length} call${calls.length === 1 ? '' : 's'} saved.` : 'No calls yet.'} Press <b>Ctrl+Shift+R</b> any time to record, or just join a call and I will offer.</p>`;
   if (settings && !settings.hasKey) html += `<div class="card"><h2>Connect the AI</h2><p class="muted">Transcripts and summaries need a key. A free Google Gemini key takes about two minutes.</p><button class="btn primary" data-a="go" data-id="settings">Set it up</button></div>`;
+  if (calls.length) {
+    const names = new Set(calls.map((c) => c.project.trim().toLowerCase()).filter(Boolean));
+    html += `<div class="stats"><div class="stat"><b>${calls.length}</b><span>Calls</span></div><div class="stat"><b>${openMine()}</b><span>Promises to keep</span></div><div class="stat"><b>${names.size}</b><span>Projects</span></div></div>`;
+  }
   if (!calls.length) html += `<div class="card" style="text-align:center;padding:40px"><h2>Your calls will show up here</h2><p class="muted">Join a Google Meet, Zoom or Teams call, or press Ctrl+Shift+R.</p></div>`;
-  for (const c of calls) {
+  html += callCards(calls);
+  return html;
+}
+
+function callCards(list: Call[]): string {
+  let html = '';
+  for (const c of list) {
     const state = progress[c.id] ? `<span class="pill work">${esc(progress[c.id])}</span>` : c.status === 'processing' ? '<span class="pill work">Writing notes…</span>' : c.status === 'recording' ? '<span class="pill err">Recording</span>' : c.status === 'error' ? '<span class="pill err">Needs attention</span>' : '';
     html += `<button class="card call" data-a="open" data-id="${c.id}"><div class="row"><b class="grow">${esc(c.title)}</b>${state}</div>
       <div class="muted small">${when(c.startedAt)} · ${esc(c.app)}${c.durationSec ? ' · ' + mins(c.durationSec) : ''}${c.project ? ' · ' + esc(c.project) : ''}</div>
-      ${c.summary ? `<div class="small" style="margin-top:6px;opacity:.85">${esc(c.summary.replace(/^\s*[-*•]\s*/gm, '').split('\n').filter(Boolean).slice(0, 2).join(' · ').slice(0, 220))}</div>` : ''}</button>`;
+      ${c.summary ? `<div class="small" style="margin-top:6px;opacity:.85">${esc(c.summary.replace(/\*\*/g, '').replace(/^\s*[-*•]\s*/gm, '').split('\n').filter(Boolean).slice(0, 2).join(' · ').slice(0, 220))}</div>` : ''}</button>`;
   }
   return html;
 }
@@ -102,11 +130,53 @@ function callView(): string {
   }
   const status = progress[call.id] || (call.status === 'processing' ? 'Writing notes…' : '');
   return `<button class="btn" data-a="go" data-id="home">← All calls</button>
-    <div class="row" style="margin:12px 0 4px"><input id="c-title" value="${esc(call.title)}" style="font-size:20px;font-weight:600;background:transparent;border-color:transparent"><button class="btn" data-a="md">Export Markdown</button><button class="btn" data-a="delete">Delete</button></div>
+    <div class="row" style="margin:12px 0 4px"><input id="c-title" value="${esc(call.title)}" style="font-size:20px;font-weight:600;background:transparent;border-color:transparent"><button class="btn" data-a="pdf">Export PDF</button><button class="btn" data-a="md">Export Markdown</button><button class="btn" data-a="delete">Delete</button></div>
     <div class="row muted small" style="margin-bottom:12px">${when(call.startedAt)} · ${esc(call.app)} · ${mins(call.durationSec)} · Project <input id="c-project" value="${esc(call.project)}" placeholder="none" style="width:160px;padding:3px 8px"> ${status ? `<span class="pill work">${esc(status)}</span>` : ''}</div>
     ${call.status === 'error' ? `<div class="card"><b class="bad">${esc(call.error ?? 'Something went wrong.')}</b><div style="margin-top:10px"><button class="btn primary" data-a="retry">Retry</button></div></div>` : ''}
     <div class="detail"><div>${videoUrl ? `<video id="vid" src="${videoUrl}" controls></video>` : '<div class="card muted">No video was saved for this call.</div>'}</div>
     <div><div class="tabs">${['summary', 'transcript', 'highlights'].map((t) => `<button class="tab ${tab === t ? 'active' : ''}" data-a="tab" data-id="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div>${side}</div></div>`;
+}
+
+function projectsView(): string {
+  const groups = new Map<string, Call[]>();
+  const loose: Call[] = [];
+  for (const c of calls) {
+    const n = c.project.trim();
+    if (!n) { loose.push(c); continue; }
+    const key = n.toLowerCase();
+    groups.set(key, [...(groups.get(key) ?? []), c]);
+  }
+  const list = [...groups.values()].sort((a, b) => b[0].startedAt.localeCompare(a[0].startedAt));
+  let html = '<h1>Projects</h1><p class="muted">Group calls by client or piece of work. Give a call a project from its page, and I will also guess one from the conversation.</p>';
+  if (!list.length) html += '<div class="card" style="text-align:center;padding:36px"><h2>No projects yet</h2><p class="muted">Open a call and type a project name next to its date. Calls with the same name are gathered here.</p></div>';
+  else html += '<div class="pgrid">' + list.map((cs) => {
+    const open = cs.flatMap((c) => c.promises).filter((p) => !p.done).length;
+    return `<button class="card pcard" data-a="project" data-id="${esc(cs[0].project)}"><b>${esc(cs[0].project)}</b><span class="muted small">${cs.length} call${cs.length === 1 ? '' : 's'} · last ${when(cs[0].startedAt)}</span>${open ? `<span class="pill work">${open} open promise${open === 1 ? '' : 's'}</span>` : '<span class="pill">All clear</span>'}</button>`;
+  }).join('') + '</div>';
+  if (loose.length) html += `<h3>No project (${loose.length})</h3>` + callCards(loose.slice(0, 8));
+  return html;
+}
+
+function projectView(): string {
+  const cs = calls.filter((c) => c.project.trim().toLowerCase() === project.trim().toLowerCase());
+  const open = cs.flatMap((c) => c.promises.filter((p) => !p.done).map((p) => ({ p, c })));
+  let html = `<button class="btn" data-a="go" data-id="projects">← All projects</button><h1 style="margin-top:12px">${esc(project)}</h1>
+    <p class="muted">${cs.length} call${cs.length === 1 ? '' : 's'} · ${open.length} open promise${open.length === 1 ? '' : 's'}</p>
+    <div class="row" style="margin-bottom:16px"><button class="btn primary" data-a="ask-project" data-id="${esc(project)}">Ask about this project</button></div>`;
+  if (open.length) html += '<h3>Still open</h3>' + open.map(({ p, c }) => `<label class="card row" style="margin-bottom:8px"><input type="checkbox" style="width:auto" data-a="toggle" data-call="${c.id}" data-id="${p.id}"><span class="grow"><b>${p.mine ? 'You' : esc(p.owner)}:</b> ${esc(p.text)}<div class="muted small">${esc(c.title)}${p.due ? ' · ' + esc(p.due) : ''}</div></span></label>`).join('');
+  html += '<h3>Calls</h3>' + callCards(cs);
+  return html;
+}
+
+function askView(): string {
+  const scopes = [...new Set(calls.map((c) => c.project.trim()).filter(Boolean))];
+  const log = askLog.map((a) => `<div class="q">${esc(a.q)}</div><div class="a ${a.ok ? '' : 'bad'}">${a.pending ? '<span class="listen"><i></i><i></i><i></i><i></i></span> Looking through your calls…' : md(a.a)}</div>`).join('');
+  const ideas = ['What did we decide last week?', 'What have I promised and not done yet?', 'Who asked about pricing?'];
+  return `<div class="narrow"><h1>Ask</h1><p class="muted">Ask a question and get the answer from your calls, with the call and date named.</p>
+    <div class="row" style="margin-bottom:10px"><select id="ask-scope" style="max-width:260px"><option value="">All calls</option>${scopes.map((n) => `<option value="${esc(n)}" ${askScope.toLowerCase() === n.toLowerCase() ? 'selected' : ''}>Project: ${esc(n)}</option>`).join('')}</select></div>
+    ${log || `<div class="card"><h3 style="margin-top:0">Try</h3>${ideas.map((i) => `<button class="chip" style="margin:0 8px 8px 0" data-a="ask-idea" data-id="${esc(i)}">${esc(i)}</button>`).join('')}</div>`}
+    <div class="askbar"><input id="ask-q" placeholder="Ask about your calls…" value="${esc(askDraft)}" autocomplete="off"><button class="btn primary" data-a="ask-go">Ask</button></div>
+    ${settings && !settings.hasKey ? '<p class="bad small">Add an AI key in Settings first.</p>' : ''}</div>`;
 }
 
 function promisesView(): string {
@@ -158,12 +228,15 @@ function settingsView(): string {
       <p class="muted small" style="margin-bottom:0">Transcripts need a Gemini key (Claude can't listen to audio yet). The free Gemini plan allows about 20 requests a day, and each call uses three. Get one at aistudio.google.com/apikey. Only audio and text are sent to the AI. Video stays on this PC.</p></div>
     <div class="card"><h2>Language</h2><div class="row">${sel('lang', s.language, [['auto', 'Detect automatically'], ['en', 'English'], ['hi', 'Hindi'], ['hinglish', 'Hinglish (Hindi and English mixed)']])}${sel('script', s.script, [['roman', 'Write Hindi in English letters'], ['devanagari', 'Write Hindi in Devanagari']])}</div></div>
     <div class="card"><h2>You</h2><input id="uname" value="${esc(s.userName)}" placeholder="Your name"><p class="muted small" style="margin-bottom:0">Used to tell which promises are yours.</p></div>
+    <div class="card"><h2>During a call</h2>
+      <label class="row"><input type="checkbox" style="width:auto" id="live" ${s.liveCaptions ? 'checked' : ''}><span><b>Live captions</b><div class="muted small">Writes down what the other people say as the call goes on. Needs a Gemini key. It uses about 1.5 AI requests a minute, and the free plan allows about 20 a day in total, so this suits a paid key best.</div></span></label>
+      <label class="row" style="margin-top:12px"><input type="checkbox" style="width:auto" id="copilot" ${s.copilot ? 'checked' : ''}><span><b>Suggestions</b><div class="muted small">Shows what to say next, using your earlier calls. Works with live captions.</div></span></label></div>
     <div class="card"><label class="row"><input type="checkbox" style="width:auto" id="watch" ${s.watchCalls ? 'checked' : ''}><span><b>Watch for calls</b><div class="muted small">Looks at window titles every few seconds to notice Google Meet, Zoom and Teams. Nothing is recorded until you say so.</div></span></label></div>
     <div class="card"><h2>Where things are saved</h2><button class="btn" data-a="folder">Open the MeetingAgent folder</button></div></div>`;
 }
 
 function render(): void {
-  const body = view === 'home' ? homeView() : view === 'call' ? callView() : view === 'promises' ? promisesView() : view === 'search' ? searchView() : view === 'feedback' ? feedbackView() : settingsView();
+  const body = view === 'home' ? homeView() : view === 'call' ? callView() : view === 'projects' ? projectsView() : view === 'project' ? projectView() : view === 'ask' ? askView() : view === 'promises' ? promisesView() : view === 'search' ? searchView() : view === 'feedback' ? feedbackView() : settingsView();
   const keep = (document.activeElement as HTMLElement | null)?.id;
   root.innerHTML = sidebar() + `<main class="main">${flash ? `<p class="ok">${esc(flash)}</p>` : ''}${body}</main>`;
   if (keep) (document.getElementById(keep) as HTMLInputElement | null)?.focus();
@@ -216,6 +289,22 @@ async function openCall(id: string, seek: number | null = null): Promise<void> {
   render();
 }
 
+async function runAsk(): Promise<void> {
+  const q = askDraft.trim();
+  if (!q) return;
+  askDraft = '';
+  const entry: Answer = { q, a: '', ok: true, pending: true };
+  askLog.push(entry);
+  render();
+  const result = await invoke('chat:ask', q, askScope);
+  entry.pending = false;
+  entry.ok = !!result.ok;
+  entry.a = result.text || 'I could not find an answer.';
+  render();
+  window.scrollTo(0, document.body.scrollHeight);
+  document.querySelector('.main')?.scrollTo(0, 1e6);
+}
+
 async function go(id: string): Promise<void> {
   view = id;
   flash = '';
@@ -246,6 +335,11 @@ root.addEventListener('click', async (event) => {
   else if (a === 'toggle') { await invoke('promise:toggle', el.dataset.call ?? detail?.call.id, id); await load(); }
   else if (a === 'retry' && detail) { await invoke('call:retry', detail.call.id); await load(); }
   else if (a === 'delete' && detail) { if (await invoke('call:delete', detail.call.id)) { detail = null; await go('home'); await load(); } }
+  else if (a === 'pdf' && detail) { if (await invoke('export:pdf', detail.call.id)) { flash = 'Saved.'; render(); } }
+  else if (a === 'project') { project = id; view = 'project'; render(); }
+  else if (a === 'ask-project') { askScope = id; view = 'ask'; render(); }
+  else if (a === 'ask-idea') { askDraft = id; await runAsk(); }
+  else if (a === 'ask-go') await runAsk();
   else if (a === 'md' && detail) { if (await invoke('export:markdown', detail.call.id)) { flash = 'Saved.'; render(); } }
   else if (a === 'rename' && detail) {
     const from = (document.getElementById('rn-from') as HTMLSelectElement).value;
@@ -285,6 +379,9 @@ root.addEventListener('change', async (event) => {
   else if (el.id === 'lang') { settings = await invoke('settings:set', { language: el.value }); }
   else if (el.id === 'script') { settings = await invoke('settings:set', { script: el.value }); }
   else if (el.id === 'uname') { settings = await invoke('settings:set', { userName: el.value }); }
+  else if (el.id === 'ask-scope') { askScope = el.value; }
+  else if (el.id === 'live') { settings = await invoke('settings:set', { liveCaptions: el.checked }); }
+  else if (el.id === 'copilot') { settings = await invoke('settings:set', { copilot: el.checked }); }
   else if (el.id === 'watch') { settings = await invoke('settings:set', { watchCalls: el.checked }); }
   else if (el.id === 'c-title' && detail) { await invoke('call:update', detail.call.id, { title: el.value }); await load(); }
   else if (el.id === 'c-project' && detail) { await invoke('call:update', detail.call.id, { project: el.value }); await load(); }
@@ -292,6 +389,7 @@ root.addEventListener('change', async (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && (event.target as HTMLElement).id === 'ask-q') { event.preventDefault(); void runAsk(); }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); void go('search'); }
 });
 

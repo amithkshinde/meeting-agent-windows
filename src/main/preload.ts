@@ -4,10 +4,11 @@ import { contextBridge, ipcRenderer } from 'electron';
 const INVOKE = [
   'rec:start', 'rec:stop', 'rec:bookmark', 'calls:list', 'call:get', 'call:update', 'call:retry', 'call:delete',
   'promise:toggle', 'speaker:rename', 'export:markdown', 'search', 'settings:get', 'settings:set', 'key:set', 'key:clear',
-  'feedback:list', 'feedback:send', 'app:open-folder', 'panel:resize', 'app:open-library', 'detect:state'
+  'feedback:list', 'feedback:send', 'app:open-folder', 'panel:resize', 'app:open-library', 'detect:state',
+  'panel:hide', 'live:chunk', 'chat:ask', 'export:pdf', 'calls:projects'
 ];
 const SEND = ['rec:chunk'];
-const ON = ['cmd:start', 'cmd:stop', 'cmd:bookmark', 'detected', 'call-ended', 'calls-changed', 'progress', 'rec:state', 'cmd:goto'];
+const ON = ['cmd:start', 'cmd:stop', 'cmd:bookmark', 'detected', 'call-ended', 'calls-changed', 'progress', 'rec:state', 'cmd:goto', 'live:lines', 'live:insight', 'live:note'];
 
 contextBridge.exposeInMainWorld('api', {
   invoke: (channel: string, ...args: unknown[]) => (INVOKE.includes(channel) ? ipcRenderer.invoke(channel, ...args) : Promise.reject(new Error('blocked'))),

@@ -92,7 +92,9 @@ const DEFAULTS: Omit<Settings, 'hasKey' | 'keyKind'> = {
   userName: os.userInfo().username,
   language: 'auto',
   script: 'roman',
-  watchCalls: true
+  watchCalls: true,
+  liveCaptions: false,
+  copilot: true
 };
 
 export function readSettings(): Omit<Settings, 'hasKey' | 'keyKind'> {
