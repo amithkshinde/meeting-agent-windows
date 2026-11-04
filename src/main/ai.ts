@@ -8,11 +8,27 @@ export class AIError extends Error {
 }
 
 const GEMINI = 'https://generativelanguage.googleapis.com';
-const GEMINI_MODEL = 'gemini-2.5-flash';
+// Same model as the Mac app. If Google retires it, the older one is tried next instead of failing.
+const GEMINI_MODELS = ['gemini-3.8-flash', 'gemini-2.5-flash'];
 const CLAUDE_MODEL = 'claude-sonnet-5-5';
 
 export function isClaudeKey(key: string): boolean {
   return key.startsWith('sk-ant-');
+}
+
+/** POSTs to generateContent, moving on to the next model when this one is gone (404). */
+async function generate(key: string, body: unknown): Promise<Response> {
+  let last: Response | null = null;
+  for (const model of GEMINI_MODELS) {
+    const res = await fetch(`${GEMINI}/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.status !== 404) return check(res);
+    last = res;
+  }
+  return check(last as Response);
 }
 
 async function check(res: Response): Promise<Response> {
@@ -38,15 +54,11 @@ export async function complete(key: string, system: string, prompt: string, json
     const data = (await res.json()) as { content?: { type: string; text?: string }[] };
     return (data.content ?? []).map((c) => c.text ?? '').join('');
   }
-  const res = await check(await fetch(`${GEMINI}/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-    method: 'POST',
-    headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: maxTokens, ...(json ? { responseMimeType: 'application/json' } : {}) }
-    })
-  }));
+  const res = await generate(key, {
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { maxOutputTokens: maxTokens, ...(json ? { responseMimeType: 'application/json' } : {}) }
+  });
   return geminiText(await res.json());
 }
 
@@ -84,13 +96,9 @@ export async function transcribe(key: string, file: string, instruction: string,
   const uri = info.file?.uri;
   if (!uri) throw new AIError('The AI service did not return the uploaded file.', 'other');
 
-  const res = await check(await fetch(`${GEMINI}/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-    method: 'POST',
-    headers: { 'x-goog-api-key': key, 'content-type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ fileData: { mimeType: info.file?.mimeType ?? mime, fileUri: uri } }, { text: instruction }] }],
-      generationConfig: { maxOutputTokens: 32768, temperature: 0 }
-    })
-  }));
+  const res = await generate(key, {
+    contents: [{ role: 'user', parts: [{ fileData: { mimeType: info.file?.mimeType ?? mime, fileUri: uri } }, { text: instruction }] }],
+    generationConfig: { maxOutputTokens: 32768, temperature: 0 }
+  });
   return geminiText(await res.json());
 }
