@@ -3,7 +3,7 @@
 A small floating window for your PC that notices when you join a call, records the screen and the sound, writes the
 transcript, summarises it, and keeps track of what everyone promised.
 
-Free and open source (MIT). Works in English and Hindi. You bring your own free Google Gemini key, so there is no
+Free and open source (MIT). English transcripts are written on your PC with Parakeet (no key needed). Hindi and Hinglish use your own free Google Gemini key. There is no
 subscription.
 
 > **Status: first version, not yet tested on a real Windows PC.**
@@ -74,7 +74,7 @@ then **Run anyway**. A signing certificate would remove the warning, but it cost
 
 ## Set up the AI key
 
-Transcripts and summaries need a key from Google Gemini, which has a free plan.
+Summaries, promises and live captions need a key from Google Gemini, which has a free plan. English transcripts do not: they are written on your PC.
 
 1. Open <https://aistudio.google.com/apikey> and create a key.
 2. In the app, open **Settings** and paste the key.
@@ -82,8 +82,8 @@ Transcripts and summaries need a key from Google Gemini, which has a free plan.
 The key is stored encrypted by Windows and never leaves your PC except to talk to Google.
 
 - A Claude key (it starts with `sk-ant-`) also works for summaries, but **Claude cannot listen to audio**, so
-  transcripts still need a Gemini key.
-- The free Gemini plan allows about 20 requests a day. Each call uses three, so expect roughly six calls a day.
+  live captions and Hindi or Hinglish transcripts still need a Gemini key.
+- The free Gemini plan allows about 20 requests a day. Each call uses one for the summary (and two more if Gemini writes the transcript).
 
 ---
 
@@ -154,7 +154,7 @@ In `Videos\MeetingAgent`, one folder per call:
 |---|---|
 | The `.bat` window says Node.js is not installed | Install the LTS version from <https://nodejs.org>, then double-click the file again. |
 | "Windows protected your PC" | Click **More info**, then **Run anyway**. See above. |
-| No transcript appears | Check the Gemini key in **Settings**. If you made many calls today, the free daily limit may be used up. |
+| No transcript appears | English needs the speech model (about 650 MB, one-time download, see **Settings > Speech recognition**). For Hindi or Hinglish check the Gemini key. |
 | The call is not noticed | For Meet, keep its tab in front. Or press **Ctrl+Shift+R** to start by hand. |
 
 If none of that helps, [open an issue](../../issues/new) with what you did and any error text.
@@ -197,7 +197,7 @@ copy and want feedback by email, set `feedbackEmail` in your local build only, a
 
 ## Known limits and next steps
 
-- Transcript quality and the 20-requests-a-day free limit depend on Gemini. A local engine (whisper.cpp) would remove both.
+- Hindi and Hinglish still depend on Gemini and its free daily limit. English runs on your PC.
 - Detection by window title misses a Meet tab that is behind another tab. Watching which app is using the
   microphone would fix that.
 - Live captions use short pieces of the other people's sound, so they lag by up to about 40 seconds and only cover the other side of the call. Your own voice is added to the full transcript after the call.

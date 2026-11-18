@@ -5,10 +5,11 @@ const INVOKE = [
   'rec:start', 'rec:stop', 'rec:bookmark', 'calls:list', 'call:get', 'call:update', 'call:retry', 'call:delete',
   'promise:toggle', 'speaker:rename', 'export:markdown', 'search', 'settings:get', 'settings:set', 'key:set', 'key:clear',
   'feedback:list', 'feedback:send', 'app:open-folder', 'panel:resize', 'app:open-library', 'detect:state',
-  'panel:hide', 'live:chunk', 'chat:ask', 'export:pdf', 'calls:projects'
+  'panel:hide', 'live:chunk', 'chat:ask', 'export:pdf', 'calls:projects',
+  'health:summary', 'health:report', 'health:open-logs', 'update:state', 'update:check', 'update:download', 'speech:state', 'speech:prepare'
 ];
-const SEND = ['rec:chunk'];
-const ON = ['cmd:start', 'cmd:stop', 'cmd:bookmark', 'detected', 'call-ended', 'calls-changed', 'progress', 'rec:state', 'cmd:goto', 'live:lines', 'live:insight', 'live:note'];
+const SEND = ['rec:chunk', 'log:write'];
+const ON = ['cmd:start', 'cmd:stop', 'cmd:bookmark', 'detected', 'call-ended', 'calls-changed', 'progress', 'rec:state', 'cmd:goto', 'live:lines', 'live:insight', 'live:note', 'speech:state', 'update:state'];
 
 contextBridge.exposeInMainWorld('api', {
   invoke: (channel: string, ...args: unknown[]) => (INVOKE.includes(channel) ? ipcRenderer.invoke(channel, ...args) : Promise.reject(new Error('blocked'))),

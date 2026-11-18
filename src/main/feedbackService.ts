@@ -4,9 +4,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as fb from '../shared/feedback';
 import * as store from './store';
+import { tail } from './log';
 
 /** Set these in package.json under "meetingAgent" so nobody's address is written into the source. */
-function config(): { email: string; endpoint: string; repo: string } {
+export function config(): { email: string; endpoint: string; repo: string } {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8')) as { meetingAgent?: Record<string, string> };
     const c = pkg.meetingAgent ?? {};
@@ -38,7 +39,7 @@ export function capabilities(): { email: boolean; endpoint: boolean } {
 function details(include: boolean, log: boolean): string {
   if (!include) return '';
   const lines = [`App: Meeting Agent ${app.getVersion()}`, `Windows: ${os.release()} (${os.arch()})`, `Chip: ${os.cpus()[0]?.model ?? 'unknown'}`];
-  if (log) lines.push('', '(activity log is not recorded on Windows yet)');
+  if (log) lines.push('', '--- Activity log (newest at the bottom) ---', tail(8000));
   return lines.join('\n');
 }
 

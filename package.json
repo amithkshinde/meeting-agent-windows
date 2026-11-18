@@ -1,6 +1,6 @@
 {
   "name": "meeting-agent-windows",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Meeting Agent for Windows: detects calls, records screen and audio, transcribes, summarises and tracks promises.",
   "author": "Amith K Shinde",
   "license": "MIT",
@@ -20,7 +20,8 @@
     "typescript": "^5.6.0"
   },
   "dependencies": {
-    "ffmpeg-static": "^5.2.0"
+    "ffmpeg-static": "^5.2.0",
+    "sherpa-onnx-node": "2.0.1"
   },
   "meetingAgent": {
     "repo": "amithkshinde/meeting-agent-windows",

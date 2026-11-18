@@ -2,13 +2,13 @@
 #
 # Two ways to use it:
 #   1. Open the Actions tab, choose "Build Windows installer", then "Run workflow". GitHub builds the installer
-#      and publishes it on the Releases page (tag windows-v<version>, taken from package.json).
-#   2. Or push a tag that starts with "windows-v". The same thing happens.
+#      and publishes it on the Releases page (tag v<version>, taken from package.json).
+#   2. Or push a tag that starts with "v". The same thing happens.
 name: Build Windows installer
 on:
   workflow_dispatch:
   push:
-    tags: ['windows-v*']
+    tags: ['v*']
 
 permissions:
   contents: write
@@ -49,12 +49,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          $tag = "windows-v$version"
+          $tag = "v$version"
           $exe = Get-ChildItem dist-installer -Filter *.exe | Select-Object -First 1
-          $notes = "Meeting Agent for Windows $version (64-bit, Windows 10 and 11). Download the .exe below and run it. Windows may show 'Windows protected your PC' because the app is not code-signed: click More info, then Run anyway. Report any problems at https://github.com/amithkshinde/meeting-agent-windows/issues"
+          $notes = "Meeting Agent for Windows $version. Download the .exe below and run it. Windows may show 'Windows protected your PC' because the app is not code-signed: click More info, then Run anyway. Report any problems at https://github.com/amithkshinde/meeting-agent-windows/issues"
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $exe.FullName --clobber
           } else {
-            gh release create $tag $exe.FullName --target "${{ github.sha }}" --title "Meeting Agent for Windows $version" --notes $notes --prerelease
+            gh release create $tag $exe.FullName --target "${{ github.sha }}" --title "Meeting Agent for Windows $version" --notes $notes
           }

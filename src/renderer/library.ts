@@ -6,6 +6,9 @@ interface Mark { t: number; note: string }
 interface Detail { call: Call; transcript: TLine[]; bookmarks: Mark[]; videoUrl: string | null }
 interface Hit { kind: string; callId: string; title: string; detail: string; seek?: number }
 interface Settings { userName: string; language: string; script: string; watchCalls: boolean; liveCaptions: boolean; copilot: boolean; hasKey: boolean; keyKind: string }
+interface Speech { kind: string; fraction?: number; message?: string; text: string; installed: boolean }
+interface HealthInfo { version: string; total: number; failed: number; recent: { app: string; startedAt: string; endedAt: string | null; reason: string; normal: boolean }[] }
+interface UpdateInfo { kind: string; version?: string; headline?: string; message?: string }
 interface Answer { q: string; a: string; ok: boolean; pending?: boolean }
 interface FbEntry { id: string; date: string; kind: string; message: string; sentVia: string | null }
 
@@ -35,6 +38,10 @@ let project = '';
 let askLog: Answer[] = [];
 let askDraft = '';
 let askScope = '';
+let speech: Speech | null = null;
+let healthInfo: HealthInfo | null = null;
+let updateInfo: UpdateInfo = { kind: 'idle' };
+let report = { note: '', status: '', busy: false };
 
 const root = document.getElementById('root') as HTMLElement;
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
@@ -88,7 +95,8 @@ function homeView(): string {
   const hour = new Date().getHours();
   const hello = `${hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'}${settings?.userName ? ', ' + esc(settings.userName) : ''}`;
   let html = `<h1>${hello}</h1><p class="muted">${calls.length ? `${calls.length} call${calls.length === 1 ? '' : 's'} saved.` : 'No calls yet.'} Press <b>Ctrl+Shift+R</b> any time to record, or just join a call and I will offer.</p>`;
-  if (settings && !settings.hasKey) html += `<div class="card"><h2>Connect the AI</h2><p class="muted">Transcripts and summaries need a key. A free Google Gemini key takes about two minutes.</p><button class="btn primary" data-a="go" data-id="settings">Set it up</button></div>`;
+  if (updateInfo.kind === 'available') html += `<div class="card"><div class="row"><span class="grow"><b>Meeting Agent ${esc(updateInfo.version ?? '')} is ready.</b> ${esc(updateInfo.headline ?? '')}</span><button class="btn primary" data-a="update-download">Download</button></div></div>`;
+  if (settings && !settings.hasKey) html += `<div class="card"><h2>Connect the AI</h2><p class="muted">Summaries and promises need a key (transcripts are written on this PC without one). A free Google Gemini key takes about two minutes.</p><button class="btn primary" data-a="go" data-id="settings">Set it up</button></div>`;
   if (calls.length) {
     const names = new Set(calls.map((c) => c.project.trim().toLowerCase()).filter(Boolean));
     html += `<div class="stats"><div class="stat"><b>${calls.length}</b><span>Calls</span></div><div class="stat"><b>${openMine()}</b><span>Promises to keep</span></div><div class="stat"><b>${names.size}</b><span>Projects</span></div></div>`;
@@ -222,16 +230,34 @@ function settingsView(): string {
   if (!settings) return '';
   const s = settings;
   const sel = (id: string, value: string, opts: [string, string][]) => `<select id="${id}">${opts.map(([v, l]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
+  const sp = speech;
+  const spIcon = sp?.kind === 'ready' ? '✓' : sp?.kind === 'failed' ? '⚠' : '🎙';
+  const spBar = sp?.kind === 'downloading' ? `<div style="height:6px;background:#2a2c3a;border-radius:3px;margin:8px 0"><div style="height:6px;border-radius:3px;background:#7c83ff;width:${Math.round((sp.fraction ?? 0) * 100)}%"></div></div>` : '';
+  const spButton = !sp || sp.kind === 'ready' || sp.kind === 'downloading' ? '' : `<button class="btn" data-a="speech-prepare">${sp.kind === 'failed' ? 'Try again' : sp.installed ? 'Load now' : 'Download now (about 650 MB)'}</button>`;
+  const h = healthInfo;
+  const upText = updateInfo.kind === 'checking' ? 'checking…' : updateInfo.kind === 'upToDate' ? 'up to date' : updateInfo.kind === 'available' ? `${esc(updateInfo.version ?? '')} is available` : updateInfo.kind === 'failed' ? "couldn't check (are you online?)" : '';
+  const upButton = updateInfo.kind === 'available' ? '<button class="btn primary" data-a="update-download">Download update</button>' : '<button class="btn" data-a="update-check">Check for updates</button>';
   return `<div class="narrow"><h1>Settings</h1>
+    <div class="card"><h2>Speech recognition</h2><div class="row"><span class="grow">${spIcon} ${esc(sp?.text ?? 'Checking…')}</span>${spButton}</div>${spBar}
+      <p class="muted small" style="margin-bottom:0">Transcripts are written on this PC with Parakeet, so call audio never leaves it. The speech model (about 650 MB) downloads once, in the background. It understands English and 24 other European languages. For Hindi or Hinglish, choose that language below and save a Gemini key: those calls are then transcribed by Gemini instead.</p></div>
     <div class="card"><h2>AI key</h2>${s.hasKey ? `<p class="ok">✓ ${s.keyKind === 'claude' ? 'Claude' : 'Google Gemini'} key saved (encrypted on this PC).</p>` : '<p class="muted">Paste a key to get transcripts and summaries.</p>'}
       <div class="row"><input id="key" type="password" placeholder="Paste a Gemini key (starts with AIza) or Claude key (sk-ant-)"><button class="btn primary" data-a="save-key">Save</button>${s.hasKey ? '<button class="btn" data-a="clear-key">Remove</button>' : ''}</div>
-      <p class="muted small" style="margin-bottom:0">Transcripts need a Gemini key (Claude can't listen to audio yet). The free Gemini plan allows about 20 requests a day, and each call uses three. Get one at aistudio.google.com/apikey. Only audio and text are sent to the AI. Video stays on this PC.</p></div>
+      <p class="muted small" style="margin-bottom:0">Summaries and promises use this key. Hindi and Hinglish transcripts and live captions need a Gemini key (Claude can't listen to audio yet). The free Gemini plan allows about 20 requests a day. Get one at aistudio.google.com/apikey. Only audio and text are sent to the AI. Video stays on this PC.</p></div>
     <div class="card"><h2>Language</h2><div class="row">${sel('lang', s.language, [['auto', 'Detect automatically'], ['en', 'English'], ['hi', 'Hindi'], ['hinglish', 'Hinglish (Hindi and English mixed)']])}${sel('script', s.script, [['roman', 'Write Hindi in English letters'], ['devanagari', 'Write Hindi in Devanagari']])}</div></div>
     <div class="card"><h2>You</h2><input id="uname" value="${esc(s.userName)}" placeholder="Your name"><p class="muted small" style="margin-bottom:0">Used to tell which promises are yours.</p></div>
     <div class="card"><h2>During a call</h2>
       <label class="row"><input type="checkbox" style="width:auto" id="live" ${s.liveCaptions ? 'checked' : ''}><span><b>Live captions</b><div class="muted small">Writes down what the other people say as the call goes on. Needs a Gemini key. It uses about 1.5 AI requests a minute, and the free plan allows about 20 a day in total, so this suits a paid key best.</div></span></label>
       <label class="row" style="margin-top:12px"><input type="checkbox" style="width:auto" id="copilot" ${s.copilot ? 'checked' : ''}><span><b>Suggestions</b><div class="muted small">Shows what to say next, using your earlier calls. Works with live captions.</div></span></label></div>
     <div class="card"><label class="row"><input type="checkbox" style="width:auto" id="watch" ${s.watchCalls ? 'checked' : ''}><span><b>Watch for calls</b><div class="muted small">Looks at window titles every few seconds to notice Google Meet, Zoom and Teams. Nothing is recorded until you say so.</div></span></label></div>
+    <div class="card"><h2>Recorder health</h2>
+      <div class="row" style="margin-bottom:8px"><span class="grow">Version ${esc(h?.version ?? '')} <span class="muted">${upText}</span></span>${upButton}</div>
+      <p class="${h && h.failed ? 'bad' : 'muted'}">${!h || !h.total ? 'No recordings yet.' : `Last 30 days: ${h.total} recording${h.total === 1 ? '' : 's'}, ${h.failed} ended unexpectedly.`}</p>
+      ${(h?.recent ?? []).map((r) => `<div class="small ${r.normal ? 'muted' : ''}">${r.normal ? '✓' : '⚠'} ${when(r.startedAt)} · ${esc(r.app)} · ${r.endedAt ? mins(Math.round((Date.parse(r.endedAt) - Date.parse(r.startedAt)) / 1000)) : 'open'} · ${esc(r.reason)}</div>`).join('')}
+      <p class="muted small">A private activity log is kept on this PC, with keys and email addresses removed. If a recording stopped when it should not have, send a report and say what you were doing.</p>
+      <textarea id="rp-note" placeholder="What happened? (optional)">${esc(report.note)}</textarea>
+      <div class="row" style="margin-top:8px"><button class="btn primary" data-a="send-report" ${report.busy ? 'disabled' : ''}>${report.busy ? 'Sending…' : 'Send report'}</button><button class="btn" data-a="open-logs">Open logs folder</button></div>
+      ${report.status ? `<p class="small muted">${esc(report.status)}</p>` : ''}</div>
+    </div>
     <div class="card"><h2>Where things are saved</h2><button class="btn" data-a="folder">Open the MeetingAgent folder</button></div></div>`;
 }
 
@@ -314,6 +340,9 @@ async function go(id: string): Promise<void> {
     fbCaps = { email: info.email, endpoint: info.endpoint };
     if (!fb.name) fb.name = settings?.userName ?? '';
   }
+  if (id === 'settings') {
+    [speech, healthInfo, updateInfo] = await Promise.all([invoke('speech:state'), invoke('health:summary'), invoke('update:state')]);
+  }
   render();
 }
 
@@ -335,6 +364,15 @@ root.addEventListener('click', async (event) => {
   else if (a === 'toggle') { await invoke('promise:toggle', el.dataset.call ?? detail?.call.id, id); await load(); }
   else if (a === 'retry' && detail) { await invoke('call:retry', detail.call.id); await load(); }
   else if (a === 'delete' && detail) { if (await invoke('call:delete', detail.call.id)) { detail = null; await go('home'); await load(); } }
+  else if (a === 'open-logs') await invoke('health:open-logs');
+  else if (a === 'speech-prepare') { void invoke('speech:prepare'); }
+  else if (a === 'update-check') { updateInfo = await invoke('update:check'); render(); }
+  else if (a === 'update-download') await invoke('update:download');
+  else if (a === 'send-report') {
+    report.busy = true; report.status = ''; render();
+    const result = await invoke('health:report', { note: report.note, name: settings?.userName ?? '', email: '', anonymous: true });
+    report.busy = false; report.status = result.message; render();
+  }
   else if (a === 'pdf' && detail) { if (await invoke('export:pdf', detail.call.id)) { flash = 'Saved.'; render(); } }
   else if (a === 'project') { project = id; view = 'project'; render(); }
   else if (a === 'ask-project') { askScope = id; view = 'ask'; render(); }
@@ -368,7 +406,8 @@ root.addEventListener('input', (event) => {
     query = el.value;
     window.clearTimeout(searchTimer);
     searchTimer = window.setTimeout(async () => { hits = query.trim().length >= 2 ? await invoke('search', query) : []; render(); }, 180);
-  } else if (el.id === 'fb-msg') fb.message = el.value;
+  } else if (el.id === 'rp-note') report.note = el.value;
+  else if (el.id === 'fb-msg') fb.message = el.value;
   else if (el.id === 'fb-name') fb.name = el.value;
   else if (el.id === 'fb-email') fb.email = el.value;
 });
@@ -398,6 +437,9 @@ window.api.on('progress', (id: string, message: string) => {
   if (message) progress[id] = message; else delete progress[id];
   render();
 });
+window.api.on('speech:state', (s: Speech) => { speech = s; if (view === 'settings') render(); });
+window.api.on('update:state', (u: UpdateInfo) => { updateInfo = u; if (view === 'settings' || view === 'home') render(); });
+void invoke('update:state').then((u: UpdateInfo) => { updateInfo = u; render(); });
 window.api.on('cmd:goto', (target: string) => void go(target));
 
 void load();

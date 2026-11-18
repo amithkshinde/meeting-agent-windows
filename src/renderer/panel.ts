@@ -27,6 +27,8 @@ let lines: TLine[] = [];
 let insight: Insight = { recap: [], suggestions: [] };
 let answers: Answer[] = [];
 let draft = '';
+let current = { app: 'Manual', title: 'Recording' };
+const lg = (level: 'info' | 'warn' | 'error', message: string) => window.api.send('log:write', level, message);
 
 const recorders: { rec: MediaRecorder; kind: string }[] = [];
 let streams: MediaStream[] = [];
@@ -169,6 +171,11 @@ function attach(stream: MediaStream, kind: string, mime: string | undefined, vid
   rec.ondataavailable = (e) => {
     if (e.data.size > 0) pending.push(e.data.arrayBuffer().then((buf) => window.api.send('rec:chunk', kind, buf)));
   };
+  rec.onerror = (e) => {
+    const why = (e as unknown as { error?: { message?: string } }).error?.message ?? 'unknown error';
+    lg('error', `The ${kind} recorder reported an error: ${why}`);
+    void stopRecording('recorderError', `${kind}: ${why}`);
+  };
   rec.start(2000);
   recorders.push({ rec, kind });
 }
@@ -210,9 +217,10 @@ function startLive(): void {
   cycle();
 }
 
-async function startRecording(app: string, title: string): Promise<void> {
+async function startRecording(app: string, title: string, resumedFrom: string | null = null): Promise<void> {
   if (phase === 'recording') return;
-  note = '';
+  current = { app, title };
+  if (!resumedFrom) note = '';
   liveNote = '';
   lines = [];
   insight = { recap: [], suggestions: [] };
@@ -233,7 +241,7 @@ async function startRecording(app: string, title: string): Promise<void> {
     } catch {
       note = 'Your microphone is not available, so only the other people will be written down.';
     }
-    await window.api.invoke('rec:start', app, title);
+    await window.api.invoke('rec:start', app, title, resumedFrom);
 
     attach(display, 'screen', pickMime(['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']), true);
     soundTracks = display.getAudioTracks();
@@ -241,7 +249,12 @@ async function startRecording(app: string, title: string): Promise<void> {
     else note = (note ? note + ' ' : '') + "Windows did not share the PC's sound, so the other people may be missing from the transcript.";
     if (mic) attach(mic, 'mic', pickMime(['audio/webm;codecs=opus', 'audio/webm']), false);
 
-    display.getVideoTracks()[0].addEventListener('ended', () => void stopRecording());
+    display.getVideoTracks()[0].addEventListener('ended', () => {
+      lg('warn', 'Windows ended the screen share (the capture track ended)');
+      void stopRecording('captureEnded', 'Windows ended the screen share');
+    });
+    soundTracks.forEach((t) => t.addEventListener('ended', () => lg('warn', 'The PC sound track ended')));
+    mic?.getAudioTracks().forEach((t) => t.addEventListener('ended', () => lg('warn', 'The microphone track ended (unplugged or switched?)')));
     startedAt = Date.now();
     marks = 0;
     ended = false;
@@ -250,13 +263,15 @@ async function startRecording(app: string, title: string): Promise<void> {
   } catch (error) {
     streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
     streams = [];
+    lg('error', `Could not start recording: ${(error as Error).message}`);
     note = `Could not start recording: ${(error as Error).message}`;
     setPhase(detected ? 'detected' : 'idle');
   }
 }
 
-async function stopRecording(): Promise<void> {
+async function stopRecording(reason = 'manualStop', detail = ''): Promise<void> {
   if (phase !== 'recording') return;
+  phase = 'processing';
   stopLive();
   const stops = recorders.map(({ rec }) => new Promise<void>((resolve) => {
     rec.onstop = () => resolve();
@@ -271,7 +286,11 @@ async function stopRecording(): Promise<void> {
   pending = [];
   progress = 'Saving the recording…';
   setPhase('processing');
-  await window.api.invoke('rec:stop');
+  const outcome = (await window.api.invoke('rec:stop', reason, detail)) as { resume?: boolean; app?: string; title?: string; from?: string } | undefined;
+  if (outcome?.resume) {
+    note = 'The recording was interrupted, so I started a new one. This call will be saved in more than one part.';
+    setTimeout(() => void startRecording(outcome.app ?? current.app, outcome.title ?? current.title, outcome.from ?? null), 3000);
+  }
 }
 
 async function bookmark(): Promise<void> {
@@ -359,7 +378,7 @@ window.api.on('live:note', (message: string) => {
 });
 
 window.__startFromMain = (app, title) => void startRecording(app, title);
-window.__stopFromMain = () => void stopRecording();
+window.__stopFromMain = (reason, detail) => void stopRecording(reason ?? 'manualStop', detail ?? '');
 window.__bookmarkFromMain = () => void bookmark();
 
 void window.api.invoke('settings:get').then((s: PanelSettings) => { settings = s; render(); });

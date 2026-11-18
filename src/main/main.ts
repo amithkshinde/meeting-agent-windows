@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, Notification, Tray, app, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, screen, session, shell } from 'electron';
+import { BrowserWindow, Menu, Notification, Tray, app, desktopCapturer, dialog, globalShortcut, ipcMain, nativeImage, powerMonitor, screen, session, shell } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -8,10 +8,16 @@ import { rename } from '../shared/transcript';
 import { search } from '../shared/search';
 import { markdown, html, fileName } from './exporter';
 import * as feedback from './feedbackService';
-import { processCall } from './pipeline';
+import * as health from './health';
+import * as ledger from './ledger';
+import { beginSession, endSession, log } from './log';
+import * as parakeet from './parakeet';
 import * as live from './live';
 import { CHAT_SYSTEM, chatContext, chatPrompt } from '../shared/live';
 import { AIError, complete } from './ai';
+import { processCall } from './pipeline';
+import * as updater from './updater';
+import { diskVerdict, plain, shouldResume, EndReason, failures, countRecent } from '../shared/logcore';
 import { clearKey, keyKind, loadKey, saveKey } from './secrets';
 import * as store from './store';
 import { listWindows } from './windows';
@@ -23,9 +29,16 @@ let tray: Tray | null = null;
 interface Recording {
   id: string;
   startedAt: number;
+  app: string;
+  title: string;
   streams: Record<string, fs.WriteStream>;
+  lastChunk: number;
+  chunks: Record<string, number>;
 }
 let recording: Recording | null = null;
+let resumeCount = 0;
+let lastSleepStop: { app: string; title: string; at: number } | null = null;
+let lowDiskShown = false;
 let detected: DetectedCall | null = null;
 const debouncer = new CallDebouncer();
 
@@ -83,8 +96,8 @@ function startRecordingNow(call?: DetectedCall): void {
   inPanel(`window.__startFromMain(${JSON.stringify(target.app)}, ${JSON.stringify(target.title)})`);
 }
 
-function stopRecordingNow(): void {
-  inPanel('window.__stopFromMain()');
+function stopRecordingNow(reason: EndReason = 'manualStop', detail = ''): void {
+  inPanel(`window.__stopFromMain(${JSON.stringify(reason)}, ${JSON.stringify(detail)})`);
 }
 
 function bookmarkNow(): void {
@@ -122,6 +135,7 @@ function startWatching(): void {
       const result = debouncer.feed(matchCall(await listWindows()));
       if (result.started) {
         detected = result.started;
+        log.info('detect', `Call detected: ${detected.app}, window "${detected.title}"`);
         panel?.webContents.send('detected', detected);
         if (!recording) {
           showPanel();
@@ -131,6 +145,7 @@ function startWatching(): void {
         }
       }
       if (result.ended) {
+        log.info('detect', `Call no longer detected: ${result.ended.app}${recording ? ' (still recording; the app never stops a recording by itself)' : ''}`);
         detected = null;
         panel?.webContents.send('call-ended', result.ended);
       }
@@ -166,47 +181,85 @@ function settingsView(): Settings {
   return { ...store.readSettings(), hasKey: !!key, keyKind: keyKind(key) };
 }
 
+async function finishRecording(current: Recording, reason: EndReason, detail: string): Promise<void> {
+  await Promise.all(Object.values(current.streams).map((s) => new Promise<void>((resolve) => s.end(resolve))));
+  const seconds = Math.round((Date.now() - current.startedAt) / 1000);
+  ledger.finish(current.id, reason, detail);
+  const line = `Recording ended after ${Math.floor(seconds / 60)} min ${seconds % 60} s: ${plain(reason)}${detail ? ` (${detail})` : ''}. Chunks received: screen ${current.chunks.screen}, system ${current.chunks.system}, mic ${current.chunks.mic}`;
+  if (['manualStop', 'callEnded', 'quit'].includes(reason)) log.info('recorder', line); else log.warn('recorder', line);
+  const call = store.readCall(current.id);
+  if (call) {
+    call.durationSec = seconds;
+    call.status = 'processing';
+    store.writeCall(call);
+  }
+  changed();
+  void processCall(current.id, (message) => {
+    panel?.webContents.send('progress', current.id, message);
+    library?.webContents.send('progress', current.id, message);
+  }).then(() => {
+    changed();
+    panel?.webContents.send('progress', current.id, '');
+  });
+}
+
 function setupIpc(): void {
-  handle('rec:start', (appName: string, title: string) => {
+  handle('rec:start', (appName: string, title: string, resumedFrom?: string | null) => {
     const call = store.newCall(appName, title);
     live.reset();
     const dir = store.folder(call.id);
+    if (!resumedFrom) resumeCount = 0;
     recording = {
       id: call.id,
       startedAt: Date.now(),
+      app: appName,
+      title,
+      lastChunk: Date.now(),
+      chunks: { screen: 0, system: 0, mic: 0 },
       streams: {
         screen: fs.createWriteStream(path.join(dir, 'screen.webm')),
         system: fs.createWriteStream(path.join(dir, 'system.webm')),
         mic: fs.createWriteStream(path.join(dir, 'mic.webm'))
       }
     };
+    for (const [kind, stream] of Object.entries(recording.streams)) {
+      stream.on('error', (error) => log.error('recorder', `Could not write ${kind}.webm: ${error.message}`));
+    }
+    const free = health.freeBytes(store.root());
+    ledger.begin({ id: call.id, app: appName, startedAt: new Date().toISOString(), automatic: false, resumedFrom: resumedFrom ?? undefined, freeGBAtStart: free === null ? undefined : Math.round(free / 1e8) / 10 });
+    log.info('recorder', `Recording started: ${appName}, window "${title}"${resumedFrom ? ', continuing after an interruption' : ''}`);
     changed();
     return { id: call.id };
   });
 
   ipcMain.on('rec:chunk', (_event, kind: string, data: ArrayBuffer) => {
-    recording?.streams[kind]?.write(Buffer.from(data));
+    if (!recording) return;
+    recording.lastChunk = Date.now();
+    recording.chunks[kind] = (recording.chunks[kind] ?? 0) + 1;
+    recording.streams[kind]?.write(Buffer.from(data));
   });
 
-  handle('rec:stop', async () => {
+  ipcMain.on('log:write', (_event, level: 'info' | 'warn' | 'error', message: string) => {
+    const lv = level === 'warn' || level === 'error' ? level : 'info';
+    log[lv]('panel', String(message).slice(0, 2000));
+  });
+
+  handle('rec:stop', async (reason: EndReason = 'manualStop', detail = '') => {
     const current = recording;
-    if (!current) return;
+    if (!current) return { resume: false };
     recording = null;
-    await Promise.all(Object.values(current.streams).map((s) => new Promise<void>((resolve) => s.end(resolve))));
-    const call = store.readCall(current.id);
-    if (call) {
-      call.durationSec = Math.round((Date.now() - current.startedAt) / 1000);
-      call.status = 'processing';
-      store.writeCall(call);
+    await finishRecording(current, reason, detail);
+    const callStillThere = detected !== null || current.app === 'Manual';
+    const resume = shouldResume(reason, resumeCount, callStillThere);
+    if (resume) {
+      resumeCount += 1;
+      log.warn('recorder', `Starting a new recording to continue this call (attempt ${resumeCount} of 3)`);
+      return { resume: true, app: current.app, title: current.title, from: current.id };
     }
-    changed();
-    void processCall(current.id, (message) => {
-      panel?.webContents.send('progress', current.id, message);
-      library?.webContents.send('progress', current.id, message);
-    }).then(() => {
-      changed();
-      panel?.webContents.send('progress', current.id, '');
-    });
+    if (!['manualStop', 'callEnded', 'quit'].includes(reason)) {
+      log.error('recorder', `Recording ended early and was not restarted: ${plain(reason)}. ${detail}`);
+    }
+    return { resume: false };
   });
 
   handle('rec:bookmark', () => {
@@ -339,11 +392,129 @@ function setupIpc(): void {
   handle('feedback:list', () => ({ entries: feedback.list(), ...feedback.capabilities() }));
   handle('feedback:send', (input: feedback.SendInput, route: 'auto' | 'online' | 'email' | 'github' | 'copied') => feedback.send(input, route));
   handle('app:open-folder', () => shell.openPath(store.root()));
+
+  handle('health:summary', () => {
+    const all = ledger.read();
+    return {
+      version: app.getVersion(),
+      total: countRecent(all, 30),
+      failed: failures(all, 30).length,
+      recent: all.slice(-5).reverse().map((e) => ({ app: e.app, startedAt: e.startedAt, endedAt: e.endedAt ?? null, reason: e.reason ? plain(e.reason) : 'still recording', normal: !e.reason || ['manualStop', 'callEnded', 'quit'].includes(e.reason) }))
+    };
+  });
+  handle('health:report', (input: health.ReportInput) => health.sendReport(input));
+  handle('health:open-logs', () => health.openLogs());
+  handle('update:state', () => updater.getState());
+  handle('update:check', () => updater.check(true));
+  handle('update:download', () => updater.download());
+  handle('speech:state', () => ({ ...parakeet.getState(), text: parakeet.describe(), installed: parakeet.isInstalled() }));
+  handle('speech:prepare', () => parakeet.prepare().then(() => true, () => false));
 }
 
 // MARK: start
 
+process.on('uncaughtException', (error) => log.error('app', `Uncaught error: ${error.stack ?? error.message}`));
+process.on('unhandledRejection', (reason) => log.error('app', `Unhandled promise error: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`));
+app.on('render-process-gone', (_event, contents, details) => {
+  log.error('app', `A window's process ended (${details.reason}, exit code ${details.exitCode})`);
+  if (recording && contents === panel?.webContents) {
+    const current = recording;
+    recording = null;
+    void finishRecording(current, 'rendererCrashed', details.reason);
+    resumeCount += 1;
+    // Rebuild the floating window; the person can press Record again, or it carries on if the call is still going.
+    panel?.destroy();
+    createPanel();
+    if (detected && resumeCount <= 3) setTimeout(() => startRecordingNow(detected ?? undefined), 4000);
+  }
+});
+app.on('child-process-gone', (_event, details) => log.warn('app', `A helper process ended: ${details.type} (${details.reason})`));
+
+/** Every 15 seconds: is sound and picture still arriving, and is there room on the disk? */
+function watchRecording(): void {
+  setInterval(() => {
+    if (!recording) { lowDiskShown = false; return; }
+    const silentFor = Date.now() - recording.lastChunk;
+    if (silentFor > 30_000) {
+      log.error('recorder', `Nothing has arrived from the capture for ${Math.round(silentFor / 1000)} s. Chunks: screen ${recording.chunks.screen}, system ${recording.chunks.system}, mic ${recording.chunks.mic}`);
+      stopRecordingNow('stalled', `no data for ${Math.round(silentFor / 1000)} s`);
+      return;
+    }
+    const free = health.freeBytes(store.root());
+    const verdict = diskVerdict(free);
+    if (verdict === 'critical' && free !== null) {
+      log.error('disk', `Only ${health.gigabytes(free)} free. Stopping the recording so the files are not damaged.`);
+      new Notification({ title: 'Recording stopped', body: `This PC is almost out of space (${health.gigabytes(free)} left). What was recorded is saved.` }).show();
+      stopRecordingNow('diskFull', `${health.gigabytes(free)} free`);
+    } else if (verdict === 'low' && free !== null && !lowDiskShown) {
+      lowDiskShown = true;
+      log.warn('disk', `Free space is getting low: ${health.gigabytes(free)}`);
+      new Notification({ title: 'Low on disk space', body: `${health.gigabytes(free)} left. A long recording could be cut short.` }).show();
+    }
+  }, 15_000).unref();
+}
+
+function watchPower(): void {
+  powerMonitor.on('suspend', () => {
+    log.info('power', 'The PC is going to sleep');
+    if (recording) {
+      lastSleepStop = { app: recording.app, title: recording.title, at: Date.now() };
+      log.warn('power', 'Stopping the recording before sleep so it is saved');
+      stopRecordingNow('sleep', 'the PC went to sleep');
+    }
+  });
+  powerMonitor.on('resume', () => {
+    log.info('power', 'The PC woke up');
+    setTimeout(() => {
+      if (lastSleepStop && Date.now() - lastSleepStop.at < 30 * 60_000 && detected && !recording) {
+        const slept = lastSleepStop;
+        lastSleepStop = null;
+        log.info('power', 'The call is still going after waking, so recording again');
+        startRecordingNow({ app: slept.app, title: slept.title });
+      }
+    }, 10_000);
+  });
+}
+
+/** A call still marked as recording or processing was cut off. Keep what was saved and write the transcript now. */
+function recoverInterrupted(unclean: boolean): void {
+  const cutOff = ledger.closeOpenAsCrashed();
+  let salvaged = 0;
+  for (const call of store.listCalls()) {
+    if (call.status !== 'recording' && call.status !== 'processing') continue;
+    const dir = store.folder(call.id);
+    const hasAudio = ['system.webm', 'mic.webm'].some((f) => { try { return fs.statSync(path.join(dir, f)).size > 1000; } catch { return false; } });
+    if (hasAudio) {
+      salvaged += 1;
+      log.warn('recorder', `Recovering the interrupted call ${call.id}`);
+      call.error = undefined;
+      call.summary = call.summary || '';
+      store.writeCall(call);
+      void processCall(call.id, (m) => library?.webContents.send('progress', call.id, m)).then(changed);
+    } else {
+      call.status = 'error';
+      call.error = 'The app closed before anything was recorded for this call.';
+      store.writeCall(call);
+    }
+  }
+  if (unclean || cutOff.length) {
+    for (const entry of cutOff) log.error('recorder', `Recording ${entry.id} was cut off by a crash or a power cut`);
+    new Notification({
+      title: 'Meeting Agent closed unexpectedly',
+      body: salvaged ? 'I kept what was recorded and I am writing the transcript. Please send a report from Settings so this can be fixed.' : 'It has been logged. If it keeps happening, send a report from Settings.'
+    }).show();
+  }
+}
+
 app.whenReady().then(() => {
+  parakeet.configure({ modelsDir: path.join(app.getPath('userData'), 'models') });
+  const previous = beginSession(app.getVersion());
+  log.info('session', `──────── Meeting Agent ${app.getVersion()} started ────────`);
+  log.info('session', health.machineLine());
+  const free = health.freeBytes(store.root());
+  log.info('session', `Free disk space: ${free === null ? 'unknown' : health.gigabytes(free)}`);
+  if (previous) log.warn('session', `The previous run (started ${previous.startedAt}, version ${previous.version || 'unknown'}) did not quit cleanly. It crashed, was force-quit, or the PC lost power.`);
+
   setupCapture();
   setupIpc();
   createPanel();
@@ -351,16 +522,28 @@ app.whenReady().then(() => {
   registerShortcuts();
   startWatching();
   openLibrary();
-  // A call that was still being written when the app closed cannot be finished; mark it so it is not stuck.
-  for (const call of store.listCalls()) {
-    if (call.status === 'recording' || call.status === 'processing') {
-      call.status = 'error';
-      call.error = 'The app closed before this call was finished. Press Retry to try again.';
-      store.writeCall(call);
+  watchRecording();
+  watchPower();
+  recoverInterrupted(previous !== null);
+  parakeet.onState((s) => library?.webContents.send('speech:state', { ...s, text: parakeet.describe(s), installed: parakeet.isInstalled() }));
+  updater.start((state, remind) => {
+    library?.webContents.send('update:state', state);
+    if (state.kind === 'available' && remind) {
+      const n = new Notification({ title: `Meeting Agent ${state.version} is ready`, body: state.headline || 'Click to see what is new.' });
+      n.on('click', () => openLibrary('settings'));
+      n.show();
     }
-  }
+  });
+  // Fetch the speech model in the background so the first call is not delayed by it.
+  setTimeout(() => { parakeet.prepare().catch(() => undefined); }, 15_000).unref();
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('before-quit', () => {
+  if (recording) {
+    log.warn('app', 'The app is quitting while recording');
+    ledger.finish(recording.id, 'quit', 'The app was quit while recording.');
+  }
+});
+app.on('will-quit', () => { globalShortcut.unregisterAll(); log.info('session', 'Quit normally.'); endSession(); });
 // Stay in the tray when the windows are closed, so calls are still noticed.
 app.on('window-all-closed', () => undefined);

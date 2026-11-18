@@ -5,6 +5,6 @@ interface Window {
     on(channel: string, fn: (...args: any[]) => void): void;
   };
   __startFromMain?: (app: string, title: string) => void;
-  __stopFromMain?: () => void;
+  __stopFromMain?: (reason?: string, detail?: string) => void;
   __bookmarkFromMain?: () => void;
 }

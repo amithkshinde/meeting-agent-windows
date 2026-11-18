@@ -20,3 +20,6 @@ nsis:
   shortcutName: Meeting Agent
 asarUnpack:
   - node_modules/ffmpeg-static/**
+  - node_modules/sherpa-onnx-node/**
+  - node_modules/sherpa-onnx-win-x64/**
+  - node_modules/sherpa-onnx-win-arm64/**

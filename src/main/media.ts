@@ -37,3 +37,21 @@ export async function toOgg(file: string): Promise<string | null> {
   const out = file.replace(/\.webm$/, '.ogg');
   return (await run(['-i', file, '-vn', '-c:a', 'copy', out])) ? out : null;
 }
+
+/**
+ * Decodes any audio or video file to 16 kHz mono samples, which is what the speech engine reads.
+ * The raw samples go through a temporary file so a long call does not need a huge pipe buffer.
+ */
+export async function decodeTo16k(file: string): Promise<Float32Array | null> {
+  if (!fs.existsSync(file) || fs.statSync(file).size < 1000) return null;
+  const raw = file.replace(/\.[a-z0-9]+$/i, '') + '.pcm16k.f32';
+  try {
+    if (!(await run(['-i', file, '-vn', '-ac', '1', '-ar', '16000', '-f', 'f32le', raw]))) return null;
+    const bytes = fs.readFileSync(raw);
+    // Copy so the samples start on a 4-byte boundary.
+    const copy = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength - (bytes.byteLength % 4));
+    return new Float32Array(copy);
+  } finally {
+    try { fs.rmSync(raw, { force: true }); } catch { /* ignore */ }
+  }
+}

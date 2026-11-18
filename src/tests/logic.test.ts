@@ -114,3 +114,105 @@ test('store: create, list, bookmark, settings', () => {
   store.writeSettings({ language: 'hinglish' });
   assert.equal(store.readSettings().language, 'hinglish');
 });
+
+// MARK: reliability, speech and updates (0.2.0)
+
+import { redact, formatLine, failures, closeOpen, ledgerReport, shouldResume, diskVerdict, LedgerEntry } from '../shared/logcore';
+import { utterances, splitAtSilence, removeEchoes, toLines } from '../shared/speech';
+import { isNewer, compareVersions, parseRelease, pickInstaller, headline, shouldRemind } from '../shared/update';
+
+test('log lines never carry keys, emails or the account name', () => {
+  assert.ok(redact('key AIzaSyA1234567890abcdefghijkl end').includes('[key]'));
+  assert.ok(!redact('mail amith@example.com now').includes('@'));
+  assert.equal(redact('C:\\Users\\amith\\Videos\\x'), 'C:\\Users\\~\\Videos\\x');
+  const line = formatLine('warn', 'recorder', 'two\nlines');
+  assert.ok(line.includes('WARN ') && line.includes('[recorder]') && line.endsWith('\n') && !line.slice(0, -1).includes('\n'));
+});
+
+test('the ledger separates normal endings from failures', () => {
+  const now = Date.parse('2026-11-17T12:00:00Z');
+  const entries: LedgerEntry[] = [
+    { id: 'a', app: 'Google Meet', startedAt: '2026-11-17T10:00:00Z', endedAt: '2026-11-17T10:30:00Z', automatic: false, reason: 'manualStop' },
+    { id: 'b', app: 'Zoom', startedAt: '2026-11-16T10:00:00Z', endedAt: '2026-11-16T10:20:00Z', automatic: false, reason: 'captureEnded' },
+    { id: 'c', app: 'Zoom', startedAt: '2026-11-15T10:00:00Z', automatic: false }
+  ];
+  assert.equal(failures(entries, 7, now).length, 1);
+  const closed = closeOpen(entries, new Date(now));
+  assert.equal(closed[2].reason, 'crashed');
+  assert.equal(failures(closed, 7, now).length, 2);
+  assert.ok(ledgerReport(closed, now).includes('2 ended unexpectedly'));
+});
+
+test('restart only after interruptions, and only a few times', () => {
+  assert.equal(shouldResume('captureEnded', 0, true), true);
+  assert.equal(shouldResume('captureEnded', 3, true), false);
+  assert.equal(shouldResume('captureEnded', 0, false), false);
+  assert.equal(shouldResume('sleep', 0, true), false);
+  assert.equal(shouldResume('manualStop', 0, true), false);
+});
+
+test('disk space verdicts', () => {
+  assert.equal(diskVerdict(500_000_000), 'critical');
+  assert.equal(diskVerdict(2_000_000_000), 'low');
+  assert.equal(diskVerdict(50_000_000_000), 'fine');
+  assert.equal(diskVerdict(null), 'fine');
+});
+
+test('word pieces become sentences with start times', () => {
+  const tokens = [
+    { text: ' Hello', start: 0, end: 0.4 }, { text: ' the', start: 0.5, end: 0.7 }, { text: 're', start: 0.7, end: 0.9 }, { text: '.', start: 0.9, end: 1 },
+    { text: ' How', start: 1.1, end: 1.3 }, { text: ' are', start: 1.3, end: 1.5 }, { text: ' you', start: 1.5, end: 1.8 }, { text: '?', start: 1.8, end: 1.9 },
+    { text: ' Fine', start: 5, end: 5.4 }
+  ];
+  const u = utterances(tokens);
+  assert.deepEqual(u.map((x) => x.text), ['Hello there.', 'How are you?', 'Fine']);
+  assert.equal(u[2].start, 5);
+});
+
+test('long audio is cut at the quietest moment, not mid-word', () => {
+  const rate = 16000;
+  const samples = new Float32Array(rate * 70).fill(0.2);
+  samples.fill(0, rate * 27, rate * 28);          // a pause near the 27 second mark
+  const pieces = splitAtSilence(samples, rate);
+  assert.ok(pieces.length >= 2);
+  assert.ok(pieces[0][1] >= rate * 27 && pieces[0][1] <= rate * 28, `cut at ${pieces[0][1] / rate}s`);
+  assert.equal(pieces[pieces.length - 1][1], samples.length);
+  assert.deepEqual(splitAtSilence(new Float32Array(rate * 10), rate), [[0, rate * 10]]);
+});
+
+test('microphone echo of the call is dropped, real replies are kept', () => {
+  const them = [{ start: 10, end: 14, text: 'We should ship the release on Friday afternoon' }];
+  const you = [{ start: 10.5, end: 14, text: 'we should ship the release on friday afternoon' }, { start: 20, end: 22, text: 'Sounds good to me' }];
+  const kept = removeEchoes(you, them);
+  assert.deepEqual(kept.map((x) => x.text), ['Sounds good to me']);
+  const merged = T.merge(toLines(them, 'Them'), toLines(kept, 'You')).map(T.format);
+  assert.deepEqual(merged, ['[00:10] Them: We should ship the release on Friday afternoon', '[00:20] You: Sounds good to me']);
+});
+
+test('update check: versions, releases and the right installer', () => {
+  assert.equal(compareVersions('v0.10.0', '0.9.9'), 1);
+  assert.equal(compareVersions('0.2', '0.2.0'), 0);
+  assert.equal(isNewer('v0.3.0', '0.2.0'), true);
+  assert.equal(isNewer('v0.2.0', '0.2.0'), false);
+  assert.equal(isNewer('weird', '0.2.0'), false);
+  const release = parseRelease({
+    tag_name: 'v0.3.0', html_url: 'https://github.com/x/y/releases/tag/v0.3.0', body: "## What's new\n- Faster",
+    assets: [
+      { name: 'MeetingAgent-0.3.0-arm64.dmg', browser_download_url: 'https://e.com/a.dmg' },
+      { name: 'MeetingAgent-Setup-0.3.0-x64.exe', browser_download_url: 'https://e.com/w.exe' }
+    ]
+  });
+  assert.ok(release);
+  assert.equal(pickInstaller(release!, 'x64'), 'https://e.com/w.exe');
+  assert.equal(pickInstaller(release!, 'arm64'), null);
+  assert.equal(headline(release!.notes), "What's new");
+  assert.equal(parseRelease({ tag_name: 'v1.0.0', prerelease: true }), null);
+  assert.equal(parseRelease({ message: 'Not Found' }), null);
+  assert.equal(shouldRemind(null), true);
+  assert.equal(shouldRemind(Date.now() - 3600_000), false);
+});
+
+test('windows-v and mac-v style tags are read as versions', () => {
+  assert.equal(compareVersions('windows-v0.3.0', '0.2.0'), 1);
+  assert.equal(isNewer('v0.3.1', '0.3.0'), true);
+});
