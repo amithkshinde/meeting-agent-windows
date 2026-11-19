@@ -15,6 +15,17 @@ Looking for the Mac version? See **[meeting-agent-mac](https://github.com/amithk
 
 ---
 
+## What's new in 0.3.0 (released 18 November 2026)
+
+- **English transcripts are written on your PC** with Parakeet, so call audio never leaves it and no key is needed. Hindi and Hinglish still use your own Gemini key. The speech model (about 650 MB) downloads once, in the background.
+- **Activity log and health report.** If the app closes suddenly, open Settings to see how each recording ended, then send a report. Keys and emails are removed.
+- **A recording that recovers.** If Windows ends the screen share or a device is unplugged, the app saves what it has and starts a new part, up to 3 times.
+- **Update check.** A banner offers the new version when one is published.
+- **No more echo in transcripts.** Mic copies of the call are no longer written as things you said.
+- Live captions, chat and PDF export are unchanged.
+
+Older versions are on the [Releases page](https://github.com/amithkshinde/meeting-agent-windows/releases).
+
 ## Contents
 
 1. [What it does](#what-it-does)
